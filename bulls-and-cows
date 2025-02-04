@@ -1,0 +1,79 @@
+#!/bin/bash
+
+generate_secret() {
+    while :; do
+        number=$((RANDOM % 9000 + 1000))
+        digits=$(echo "$number" | grep -o . | sort)
+        unique=$(echo "$digits" | uniq | wc -l)
+        if [ "$unique" -eq 4 ]; then
+            echo "$number"
+            return
+        fi
+    done
+}
+
+secret=$(generate_secret)
+
+echo "********************************************************************************"
+echo "* Я загадал 4-значное число с неповторяющимися цифрами. На каждом ходу делайте *"
+echo "* попытку отгадать загаданное число. Попытка - это 4-значное число с           *"
+echo "* неповторяющимися цифрами.                                                    *"
+echo "********************************************************************************"
+echo
+
+attempt=1
+history=()
+
+trap 'echo ""; echo "Для завершения работы введите q или Q."' SIGINT
+
+while true; do
+    read -p "Попытка $attempt: " input
+
+    if [[ "$input" == [qQ] ]]; then
+        exit 1
+    fi
+
+    if ! [[ "$input" =~ ^[0-9]{4}$ ]]; then
+        echo "Ошибка: введите 4-значное число с неповторяющимися цифрами или 'q' для выхода."
+        continue
+    fi
+
+    digits=()
+    for ((i=0; i<4; i++)); do
+        digit=${input:$i:1}
+        if [[ " ${digits[@]} " =~ " $digit " ]]; then
+            echo "Ошибка: цифры не должны повторяться."
+            continue 2
+        fi
+        digits+=("$digit")
+    done
+
+    bulls=0
+    cows=0
+    for ((i=0; i<4; i++)); do
+        secret_digit=${secret:$i:1}
+        input_digit=${input:$i:1}
+        if [ "$secret_digit" == "$input_digit" ]; then
+            ((bulls++))
+        else
+            if [[ "$secret" == *"$input_digit"* ]]; then
+                ((cows++))
+            fi
+        fi
+    done
+
+    history+=("$attempt. $input (Коров - $cows Быков - $bulls)")
+
+    echo "Коров - $cows Быков - $bulls"
+    echo
+    echo "История ходов:"
+    printf "%s\n" "${history[@]}"
+    echo
+
+    if [ $bulls -eq 4 ]; then
+        echo "Поздравляем! Вы угадали число $secret."
+        exit 0
+    fi
+
+    ((attempt++))
+done

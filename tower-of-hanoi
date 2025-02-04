@@ -1,0 +1,92 @@
+#!/bin/bash
+
+declare -a A=(8 7 6 5 4 3 2 1)
+declare -a B=()
+declare -a C=()
+
+move_number=1
+
+print_stacks() {
+    local a=("${A[@]}") b=("${B[@]}") c=("${C[@]}")
+    local reversed_a=() reversed_b=() reversed_c=()
+    
+    for i in $(seq $((${#a[@]} - 1)) -1 0); do reversed_a+=("${a[$i]}"); done
+    for i in $(seq $((${#b[@]} - 1)) -1 0); do reversed_b+=("${b[$i]}"); done
+    for i in $(seq $((${#c[@]} - 1)) -1 0); do reversed_c+=("${c[$i]}"); done
+
+    for ((level=0; level < 8; level++)); do
+        local a_val=" " b_val=" " c_val=" "
+        [[ $level -lt ${#reversed_a[@]} ]] && a_val="${reversed_a[$level]}"
+        [[ $level -lt ${#reversed_b[@]} ]] && b_val="${reversed_b[$level]}"
+        [[ $level -lt ${#reversed_c[@]} ]] && c_val="${reversed_c[$level]}"
+        printf "|%s|  |%s|  |%s|\n" "$a_val" "$b_val" "$c_val"
+    done
+    echo "+-+  +-+  +-+"
+    echo " A    B    C"
+}
+
+move() {
+    local from=$1 to=$2
+    local -n from_stack=$from
+    local -n to_stack=$to
+
+    if [[ ${#from_stack[@]} -eq 0 ]]; then
+        echo "Ошибка: стек $from пуст."
+        return 1
+    fi
+
+    local top_element=${from_stack[-1]}
+    if [[ ${#to_stack[@]} -gt 0 ]] && [[ $top_element -ge ${to_stack[-1]} ]]; then
+        echo "Нельзя положить $top_element на ${to_stack[-1]}!"
+        return 1
+    fi
+
+    unset from_stack[-1]
+    from_stack=("${from_stack[@]}")
+    to_stack+=("$top_element")
+}
+
+check_win() {
+    local target=(8 7 6 5 4 3 2 1)
+    local reversed_b=($(echo "${B[@]}" | tr ' ' '\n' | tac))
+    local reversed_c=($(echo "${C[@]}" | tr ' ' '\n' | tac))
+    
+    [[ "${reversed_b[*]}" == "${target[*]}" || "${reversed_c[*]}" == "${target[*]}" ]] && {
+        echo "Поздравляем! Вы победили!"
+        exit 0
+    }
+}
+
+trap 'echo; echo "Для завершения введите q или Q."' SIGINT
+
+while true; do
+    echo "Ход № $move_number"
+    print_stacks
+
+    while true; do
+        read -p "Ход № $move_number (откуда, куда): " input
+        input=$(tr -d ' ' <<<"$input" | tr '[:lower:]' '[:upper:]')
+
+        if [[ $input == "Q" ]]; then exit 1; fi
+        if [[ ${#input} -ne 2 || ! $input =~ ^[ABC]{2}$ ]]; then
+            echo "Ошибка: введите два символа (A, B, C) или Q для выхода."
+            continue
+        fi
+
+        from=${input:0:1}
+        to=${input:1:1}
+
+        if [[ $from == $to ]]; then
+            echo "Ошибка: нельзя перемещать в тот же стек."
+            continue
+        fi
+
+        if move "$from" "$to"; then
+            check_win
+            ((move_number++))
+            break
+        else
+            echo "Такое перемещение запрещено!"
+        fi
+    done
+done
