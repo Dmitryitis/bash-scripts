@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Проверка наличия необходимых утилит
+command -v yc >/dev/null 2>&1 || { echo >&2 "Ошибка: Yandex CLI (yc) не установлен."; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo >&2 "Ошибка: jq не установлен."; exit 1; }
+
+# Создание облачной сети
+echo "Создание облачной сети..."
+NETWORK_ID=$(yc vpc network create --name jmix-network --format json | jq -r '.id')
+[ -z "$NETWORK_ID" ] && { echo "Ошибка создания сети"; exit 1; }
+
+# Создание подсети
+echo "Создание подсети..."
+SUBNET_ID=$(yc vpc subnet create --name jmix-subnet --network-id $NETWORK_ID \
+--zone ru-central1-a --range 192.168.10.0/24 --format json | jq -r '.id')
+[ -z "$SUBNET_ID" ] && { echo "Ошибка создания подсети"; exit 1; }
+
+# Генерация SSH ключей
+echo "Генерация SSH ключей..."
+[ -f "yc_key" ] && { echo "Файлы ключей уже существуют"; exit 1; }
+ssh-keygen -t rsa -b 2048 -f yc_key -N "" -q
+
+
+# Создание временного файла для cloud-init
+CLOUD_INIT_FILE=$(mktemp)
+cat << EOF > "$CLOUD_INIT_FILE"
+#cloud-config
+users:
+  - name: ipiris
+    ssh-authorized-keys:
+      - $(cat yc_key.pub)
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    groups: [sudo, docker]
+    shell: /bin/bash
+EOF
+
+# Создание виртуальной машины
+echo "Создание ВМ..."
+INSTANCE_OUTPUT=$(yc compute instance create-with-container \
+--name jmix-vm \
+--zone ru-central1-a \
+--platform standard-v3 \
+--cores 2 \
+--memory 4GB \
+--create-boot-disk size=20,type=network-ssd \
+--network-interface subnet-id=$SUBNET_ID,nat-ip-version=ipv4 \
+--container-image jmix/jmix-bookstore \
+--metadata-from-file user-data="$CLOUD_INIT_FILE" \
+--format json)
+
+# Удаление временного файла
+rm -f "$CLOUD_INIT_FILE"
+
+INSTANCE_ID=$(echo "$INSTANCE_OUTPUT" | jq -r '.id')
+[ -z "$INSTANCE_ID" ] && { echo "Ошибка создания ВМ"; exit 1; }
+
+# Получение публичного IP
+echo "Получение IP адреса..."
+for i in {1..10}; do
+  PUBLIC_IP=$(yc compute instance get jmix-vm --format json | jq -r '.network_interfaces[0].primary_v4_address.one_to_one_nat.address')
+  [ -n "$PUBLIC_IP" ] && break
+  sleep 5
+done
+[ -z "$PUBLIC_IP" ] && { echo "Не удалось получить IP"; exit 1; }
+
+# Вывод результатов
+echo -e "\n\033[1mПодключение к серверу:\033[0m"
+echo "ssh -i ./yc_key ipiris@$PUBLIC_IP"
+echo -e "\n\033[1mДоступ к приложению:\033[0m"
+echo "http://$PUBLIC_IP:8080"
