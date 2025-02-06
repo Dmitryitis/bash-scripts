@@ -1,0 +1,126 @@
+#!/bin/bash
+
+set -e
+
+# Проверка наличия необходимых утилит
+command -v terraform >/dev/null 2>&1 || { echo >&2 "Ошибка: Установите Terraform."; exit 1; }
+command -v ssh-keygen >/dev/null 2>&1 || { echo >&2 "Ошибка: Установите ssh-keygen."; exit 1; }
+
+# Генерация SSH ключей, если их нет
+if [ ! -f "yc_key_terraform" ]; then
+    echo "Генерация SSH ключей..."
+    ssh-keygen -t rsa -b 2048 -f yc_key_terraform -N "" -q
+    chmod 600 yc_key_terraform
+else
+    echo "SSH ключи уже существуют."
+fi
+
+PUBLIC_KEY=$(cat yc_key_terraform.pub)
+
+# Запрос параметров Yandex Cloud
+read -p "Введите OAuth-токен Yandex Cloud: " YC_TOKEN
+read -p "Введите ID облака: " YC_CLOUD_ID
+read -p "Введите ID каталога: " YC_FOLDER_ID
+
+
+# Создание конфигурации Terraform
+cat > main.tf << EOF
+terraform {
+  required_providers {
+    yandex = {
+      source = "yandex-cloud/yandex"
+    }
+  }
+  required_version = ">= 0.13"
+}
+
+provider "yandex" {
+  token  = "${YC_TOKEN}"
+  cloud_id  = "${YC_CLOUD_ID}"
+  folder_id = "${YC_FOLDER_ID}"
+  zone  = "ru-central1-a"
+}
+
+resource "yandex_vpc_network" "network" {
+  name = "jmix-network"
+}
+
+resource "yandex_vpc_subnet" "subnet" {
+  name = "jmix-subnet"
+  zone = "ru-central1-a"
+  network_id = yandex_vpc_network.network.id
+  v4_cidr_blocks = ["192.168.10.0/24"]
+}
+
+resource "yandex_vpc_security_group" "sg" {
+  name = "jmix-sg"
+  network_id  = yandex_vpc_network.network.id
+
+  ingress {
+    protocol = "TCP"
+    port = 22
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    protocol = "TCP"
+    port = 8080
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    protocol = "ANY"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
+resource "yandex_compute_instance" "vm" {
+  name        = "jmix-vm"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores  = 2
+    memory = 4
+  }
+
+  boot_disk {
+    initialize_params {
+      size     = 20
+      type     = "network-ssd"
+      image_id = "fd827b91d99psvq5fjit" # Ubuntu 22.04 LTS
+    }
+  }
+
+  network_interface {
+    subnet_id  = yandex_vpc_subnet.subnet.id
+    nat = true
+    security_group_ids = [yandex_vpc_security_group.sg.id]
+  }
+
+  metadata = {
+    user-data = <<-EOT
+      #cloud-config
+      users:
+        - name: ipiris
+          ssh-authorized-keys:
+            - ${PUBLIC_KEY}
+          sudo: ['ALL=(ALL) NOPASSWD:ALL']
+          groups: [sudo, docker]
+          shell: /bin/bash
+      packages:
+        - docker.io
+      runcmd:
+        - systemctl enable docker
+        - systemctl start docker
+        - docker pull jmix/jmix-bookstore
+        - docker run -d --name bookstore -p 8080:8080 jmix/jmix-bookstore
+    EOT
+  }
+}
+EOF
+
+# Инициализация и применение Terraform
+terraform init
+terraform apply -auto-approve
